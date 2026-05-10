@@ -42,6 +42,53 @@ static bool parse_program_line_number(const char *line, uint16_t *line_number, c
     return true;
 }
 
+static const char *skip_space(const char *text) {
+    while (*text != '\0' && isspace((unsigned char)*text)) {
+        text++;
+    }
+    return text;
+}
+
+static bool execute_statements_in_line(BasicState *state, const char *line) {
+    char buffer[MAX_INPUT_LINE];
+    strncpy(buffer, line, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+
+    bool in_string = false;
+    char *segment = buffer;
+
+    for (char *cursor = buffer; *cursor != '\0'; ++cursor) {
+        if (*cursor == '"') {
+            in_string = !in_string;
+            continue;
+        }
+        if (*cursor != ':' || in_string) {
+            continue;
+        }
+
+        *cursor = '\0';
+        const char *trimmed = skip_space(segment);
+        if (*trimmed != '\0') {
+            bool jumped = execute_statement(state, trimmed);
+            if (!state->program_running || jumped) {
+                return jumped;
+            }
+        }
+        segment = cursor + 1;
+    }
+
+    const char *trimmed = skip_space(segment);
+    if (*trimmed != '\0') {
+        bool jumped = execute_statement(state, trimmed);
+        if (!state->program_running || jumped) {
+            return jumped;
+        }
+    }
+    return false;
+}
+
+static void handle_direct_command_line(BasicState *state, const char *line);
+
 static void display_ready_message(BasicState *state) {
     output_ASCIIZ_string(state, "Ready\n");
 }
@@ -58,7 +105,7 @@ static void run_program(BasicState *state) {
     while (state->program_running && state->current_program_line_index < state->program_line_count) {
         size_t current_index = state->current_program_line_index;
         const char *statement = state->program_lines[current_index].text;
-        bool jumped = execute_statement(state, statement);
+        bool jumped = execute_statements_in_line(state, statement);
 
         if (state->program_running) {
             if (!jumped) {
@@ -68,10 +115,10 @@ static void run_program(BasicState *state) {
     }
 }
 
-static void handle_direct_command(BasicState *state, const char *line) {
+static void handle_direct_command_segment(BasicState *state, const char *segment) {
     char command[32];
     size_t i = 0;
-    const char *cursor = line;
+    const char *cursor = segment;
 
     while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
         cursor++;
@@ -117,7 +164,38 @@ static void handle_direct_command(BasicState *state, const char *line) {
         exit(0);
     }
 
-    execute_statement(state, line);
+    execute_statements_in_line(state, segment);
+}
+
+static void handle_direct_command_line(BasicState *state, const char *line) {
+    char buffer[MAX_INPUT_LINE];
+    strncpy(buffer, line, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+
+    bool in_string = false;
+    char *segment = buffer;
+
+    for (char *cursor = buffer; *cursor != '\0'; ++cursor) {
+        if (*cursor == '"') {
+            in_string = !in_string;
+            continue;
+        }
+        if (*cursor != ':' || in_string) {
+            continue;
+        }
+
+        *cursor = '\0';
+        const char *trimmed = skip_space(segment);
+        if (*trimmed != '\0') {
+            handle_direct_command_segment(state, trimmed);
+        }
+        segment = cursor + 1;
+    }
+
+    const char *trimmed = skip_space(segment);
+    if (*trimmed != '\0') {
+        handle_direct_command_segment(state, trimmed);
+    }
 }
 
 static void handle_input_line(BasicState *state, const char *line) {
@@ -136,7 +214,7 @@ static void handle_input_line(BasicState *state, const char *line) {
         return;
     }
 
-    handle_direct_command(state, line);
+    handle_direct_command_line(state, line);
 }
 
 static void repl_input_loop(BasicState *state) {

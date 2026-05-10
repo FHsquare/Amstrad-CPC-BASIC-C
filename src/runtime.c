@@ -1,7 +1,10 @@
 #include "runtime.h"
 #include "repl.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
+#include <termios.h>
+#include <unistd.h>
 
 static const char STARTUP_MESSAGE[] = " BASIC 1.1\n\n";
 
@@ -117,10 +120,63 @@ void output_ASCIIZ_string(BasicState *state, const char *message) {
 }
 
 bool input_text_to_BASIC_input_area(BasicState *state) {
-    if (fgets(state->input_buffer, sizeof(state->input_buffer), stdin) == NULL) {
-        return false;
+    if (!isatty(fileno(stdin))) {
+        return fgets(state->input_buffer, sizeof(state->input_buffer), stdin) != NULL;
     }
-    return true;
+
+    struct termios original_termios;
+    if (tcgetattr(fileno(stdin), &original_termios) != 0) {
+        return fgets(state->input_buffer, sizeof(state->input_buffer), stdin) != NULL;
+    }
+
+    struct termios raw = original_termios;
+    raw.c_lflag &= ~(ECHO | ICANON);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(fileno(stdin), TCSAFLUSH, &raw);
+
+    size_t pos = 0;
+    int ch;
+    while (pos < sizeof(state->input_buffer) - 1) {
+        ch = getchar();
+        if (ch == EOF) {
+            break;
+        }
+
+        if (ch == '\r' || ch == '\n') {
+            state->input_buffer[pos++] = '\n';
+            state->input_buffer[pos] = '\0';
+            putchar('\n');
+            break;
+        }
+
+        if (ch == 0x7f || ch == 0x08) {
+            if (pos > 0) {
+                pos--;
+                fputs("\b \b", stdout);
+                fflush(stdout);
+            }
+            continue;
+        }
+
+        if (ch == 0x03) {
+            pos = 0;
+            state->input_buffer[pos] = '\0';
+            putchar('^');
+            putchar('C');
+            putchar('\n');
+            break;
+        }
+
+        if (ch >= ' ' && ch <= '~') {
+            state->input_buffer[pos++] = (char)ch;
+            putchar(ch);
+            fflush(stdout);
+        }
+    }
+
+    tcsetattr(fileno(stdin), TCSAFLUSH, &original_termios);
+    return pos > 0 || ch == '\n';
 }
 
 bool find_program_line(BasicState *state, uint16_t line_number, size_t *index) {
